@@ -46,7 +46,8 @@ This script automates the process of managing financial transactions received vi
 7. **Stopping Errors**: Failed emails trigger error notifications.
    - ![](./resources/20250113013843.png)
 8. **Data Storage**: All processed information is stored in a Google Sheet for future analysis and rerunning failed queries.
-   Sample SpeadSheet [Link](./resources/Copy%20of%20Sample%20Sheet.xlsx)
+   - Sample SpeadSheet [Link](./resources/Copy%20of%20Sample%20Sheet.xlsx)
+   - ![](./resources/20250126012146.png)
 
 ---
 
