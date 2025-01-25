@@ -26,9 +26,9 @@ const CONFIG = deepFreeze({
     MAIN_SHEET_NAME: "Transactions",
     EXPECTED_SHEET_TITLE: "TestsExpected",
     RESULTS_SHEET_TITLE: "TestResults",
-    DOMAIN: "budget-track.web.app",
+    WEB_DOMAIN: "budget-track.web.app",
     MOBILE_DOMAIN: "cashewapp.web.app",
-    ROUTE: "addTransaction",
+    ADD_ROUTE: "addTransaction",
     EDIT_ROUTE: "addTransactionRoute",
     GMAIL_MSGID_PREFIX: "https://mail.google.com/mail/u/0/#search/rfc822msgid:",
     GMAIL_URL_PREFIX: "https://mail.google.com/mail/u/0/?source=sync&tf=1&view=pt&search=all&th=",
@@ -56,7 +56,8 @@ const CategoryType = deepFreeze({
 const TransactionType = deepFreeze({
     DEBIT: "Debit",
     CREDIT: "Credit",
-    TRANSFER: "Transfer"
+    TRANSFER: "Transfer",
+    DUPLICATE: "Duplicate",
 });
 
 // Labels
@@ -67,10 +68,12 @@ const LABELS = {
     TESTCASES: 'Txs/🧪',    // Tag emails for running in sanity tests usecase.
     IGNORED: 'Txs/❌',      // Tag emails which are not valid transaction emails. Can be used on top of above filters to skip specific emails.
     PROCESSED: 'Txs/✅',    // Tag emails which have been processed by Script successfully.
+    TO_FIX: 'Txs/🛠️',       // Tag emails that need Regex update before it's success. These will be excluded unless regex is fixed in code.
 };
 
 LABELS.INCLUDE = [LABELS.EMAIL, LABELS.SINGLE_SMS, LABELS.BACKUP_SMS, LABELS.TESTCASES];
-LABELS.EXCLUDE = [LABELS.PROCESSED, LABELS.IGNORED];
+LABELS.EXCLUDE = [LABELS.PROCESSED, LABELS.IGNORED, LABELS.TO_FIX];
+// TODO: Add mode to rerun TO_FIX emails but exclude processed and Ignored. kanpilotID(st7w4o8yetnet2o60xjq01um)
 deepFreeze(LABELS); // Optionally, freeze the object to make it immutable
 
 // ERROR & LOGGING

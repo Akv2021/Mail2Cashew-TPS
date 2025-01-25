@@ -7,7 +7,7 @@
 function getLabelRequest(labelName){
   const allLabels = Gmail.Users.Labels.list('me');
   let label = allLabels.labels.find(l => l.name === labelName) || Gmail.Users.Labels.create({ name: labelName }, 'me');
-  return { addLabelIds: [label.id] };
+  return { addLabelIds: [label.id], labelName };
 }
 
 function populateEmailData(email){
@@ -28,20 +28,63 @@ function isEmailAlreadyProcessed() {
   return emailIdRange.some(row => row[0] === emailData.emailId);
 }
 
-function validateMandatoryFields(transactionDate, transactionAmount, category, fromAccount) {
-  const mandatoryFields = { 
+function isDuplicateTransaction(transactionPayload, existingRows) {
+  if(!DEV_CONFIG.IDENTIFY_DUPLICATES) return false;
+  
+  return existingRows.some(row => {
+    // Ensure dates are compared in the same format
+    const rowDate = moment(row[1], DATE_FORMATS.DISPLAY.DATETIME);
+    const payloadDate = moment(transactionPayload.date, DATE_FORMATS.CASHEW_FORMAT);
+
+    return (
+      rowDate.isSame(payloadDate) &&
+      parseFloat(row[2]) === transactionPayload.amount &&
+      row[4] === transactionPayload.account &&
+      row[5] === transactionPayload.category &&
+      // Handle empty/null/undefined for subcategory/ title/ notes
+      (row[6] || '') === (transactionPayload.subcategory || '') &&
+      (row[8] || '') === (transactionPayload.title || '') &&
+      (row[9] || '') === (transactionPayload.notes || '')
+    );
+  });
+}
+
+function labelEmail(labelRequest, email) {
+  if (DEV_CONFIG.MARK_AS_PROCESSED) {
+    // Approach 1 : Apply label to thread. (Doesn't use GMAIL API)
+    // Even if some emails in the thread are not processed, the tag is still applied on all emails and they're not picked on rerun of script.
+    // let nestedLabelPath = "Txs/✅";
+    // let label = GmailApp.getUserLabelByName(nestedLabelPath) //|| GmailApp.createLabel(nestedLabelPath);
+    // thread.addLabel(label);
+
+    // Approach 2 [Recommended] : Apply label to email. (Uses GMAIL API) - https://developers.google.com/gmail/api/quickstart/apps-script#configure_the_script
+    // The advantage of labeling email instead of thread is that in the edge case when few messages in thread are passing and rest are not, the label and read status
+    // gets updated only on the email which actually got processed. (Gmail > Settings > Uncheck "Conversation view"  to see each eamil in thread individually).
+    // When the script reruns, since some emails don't contain the LABEL.PROCESSED, it picks threads for those emails. Among all emails of threads, ignores read ones and processed the unread ones.
+    Gmail.Users.Messages.modify(labelRequest, 'me', emailData.emailId); // Apply the label
+    // TODO: Add failed subjects to Success email kanpilotID(ut8hsuyx5du0tljkcxnc7ixw)
+    Logger.log(`Label '${labelRequest.labelName}' applied to email with ID: ${emailData.emailId}`);
+    email.markRead();
+  }
+}
+
+function getMandatoryFields(transactionDate, transactionAmount, category, fromAccount) {
+  return { 
     Date: transactionDate, 
     Amount: transactionAmount, 
     Category: category, 
     Account: fromAccount 
   };
+}
 
+function validateMandatoryFields(mandatoryFields, email) {
   const missingFields = Object.keys(mandatoryFields).filter(field => !mandatoryFields[field]);
   
   if (missingFields.length > 0) {
     const errorMessage = `Missing mandatory fields - ${missingFields.join(", ")}`;
     logError(ErrorType.MISSING_FIELDS, `${emailData.emailSubject} : ${errorMessage}. Skipping this message.`, true); // Stopping error
     createFailureRecord(errorMessage);
+    labelEmail(labelRequestFailed, email);
     return false; // Indicates validation failure
   }
   return true; // Indicates validation success
@@ -408,7 +451,7 @@ function getTransactionSubcategory(sanitizedText, subcategoryRegex, subcategory)
 
 function createFinalTransactionUrl(filteredPayload) {
   var encodedPayload = encodeURIComponent(JSON.stringify(filteredPayload));
-  return `https://${CONFIG.DOMAIN}/${CONFIG.ROUTE}?JSON=${encodedPayload}`;
+  return `https://${CONFIG.WEB_DOMAIN}/${CONFIG.ADD_ROUTE}?JSON=${encodedPayload}`;
 }
 
 function createSingleTransactionUrl(filteredPayload) {
@@ -418,7 +461,7 @@ function createSingleTransactionUrl(filteredPayload) {
     .join('&');
 
   // Return the constructed URL
-  return `https://${CONFIG.DOMAIN}/${CONFIG.EDIT_ROUTE}?${queryString}`;
+  return `https://${CONFIG.WEB_DOMAIN}/${CONFIG.EDIT_ROUTE}?${queryString}`;
 }
 
 // Create the transaction URL with JSON payload
@@ -697,12 +740,16 @@ function getEmailStyles() {
     }
 
     /* Success template specific styles */
-    .success-row-positive {
+    .success-row-credit {
       background-color: #e8f5e9;
     }
 
-    .success-row-negative {
+    .success-row-debit {
       background-color: #fff3e0;
+    }
+
+    .success-row-duplicate {
+      background-color: #ecb4b4;
     }
 
     /* Error template specific styles */
@@ -770,10 +817,10 @@ function getEmailStyles() {
 
 function getSuccessEmailHtml(finalTransactionUrl, transactions, metadata) {
   const tableRows = transactions.map((transaction, index) => {
-    const { source, silentErrors } = metadata[index];
-    const isNegative = parseFloat(transaction.amount) < 0;
+    const { source, silentErrors, txnType } = metadata[index];
+    let classId = `success-row-${txnType.toLowerCase()}`; // success-row-<debit/credit/duplicate>
     return `
-      <tr class="${isNegative ? 'success-row-negative' : 'success-row-positive'}">
+      <tr class="${classId}">
         <td>${source}</td>
         <td class="date-column">${moment(transaction.date).format(DATE_FORMATS.DISPLAY.DATETIME)}</td>
         <td>${transaction.amount}</td>
@@ -800,7 +847,7 @@ function getSuccessEmailHtml(finalTransactionUrl, transactions, metadata) {
       <div class="action-buttons">
         <span class="button-label">PC:</span>
         <a href="${finalTransactionUrl}" class="action-link">✅ Approve</a>
-        <a href="${finalTransactionUrl.replace(CONFIG.ROUTE, CONFIG.EDIT_ROUTE)}" class="action-link edit-link">Edit ✍️</a>
+        <a href="${finalTransactionUrl.replace(CONFIG.ADD_ROUTE, CONFIG.EDIT_ROUTE)}" class="action-link edit-link">Edit ✍️</a>
       </div>
 
       <table>
@@ -824,8 +871,8 @@ function getSuccessEmailHtml(finalTransactionUrl, transactions, metadata) {
 
       <div class="action-buttons">
         <span class="button-label">Mobile:</span>
-        <a href="${finalTransactionUrl.replace(CONFIG.DOMAIN, CONFIG.MOBILE_DOMAIN)}" class="action-link">✅ Approve</a>
-        <a href="${finalTransactionUrl.replace(CONFIG.DOMAIN, CONFIG.MOBILE_DOMAIN).replace(CONFIG.ROUTE, CONFIG.EDIT_ROUTE)}" class="action-link edit-link">Edit ✍️</a>
+        <a href="${finalTransactionUrl.replace(CONFIG.WEB_DOMAIN, CONFIG.MOBILE_DOMAIN)}" class="action-link">✅ Approve</a>
+        <a href="${finalTransactionUrl.replace(CONFIG.WEB_DOMAIN, CONFIG.MOBILE_DOMAIN).replace(CONFIG.ADD_ROUTE, CONFIG.EDIT_ROUTE)}" class="action-link edit-link">Edit ✍️</a>
       </div>
       <pre style="white-space: pre-wrap; word-wrap: break-word; background: #f5f5f5; padding: 15px; border-radius: 4px;">${printProcessingSummary(false)}</pre>
     </body>

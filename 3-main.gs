@@ -28,14 +28,17 @@ function processTransactionEmails(e) {
     const metadata = []; // Holds source and silentErrors
 
     // Get Label;
-    const labelRequest = getLabelRequest(LABELS.PROCESSED);
+    const labelRequestSuccess = getLabelRequest(LABELS.PROCESSED);
+    const labelRequestFailed = getLabelRequest(LABELS.TO_FIX);   
 
     // Each thread can have multiple emails. Each email will have one transaction related info.
     emailThreads.forEach(function (thread) {
-
+      // TODO: Add bulk SMS sheet mode. For it abstract all thread. and email. calls kanpilotID(wrwn2oygaj01zvc7awij7u41)
       // Emails in each thread
       var emails = thread.getMessages();
       emails.forEach(function (email) {
+        // Fetch existing rows INSIDE the loop to capture newly added rows
+        const existingRows = transactionSheet.getRange(2, 1, transactionSheet.getLastRow() - 1, 15).getValues();
         
         // Step 2: Skip already processed emails unless overridden in config
         if (email.isUnread() || DEV_CONFIG.RERUN_READ_MAILS) {
@@ -60,6 +63,7 @@ function processTransactionEmails(e) {
           if (!applicableRegexMap) {
             logError(ErrorType.NO_RULE, `(${emailData.source}) No ruleId found for ${emailSubject}`, true); // Stopping error
             createFailureRecord("No applicable rule found.");
+            labelEmail(labelRequestFailed, email);
             return;
           }
           if (applicableRegexMap == CONSTANTS.DUPLICATE) return;
@@ -85,7 +89,7 @@ function processTransactionEmails(e) {
           const title = generateTitle(merchant, sanitizedText);
 
           // Step 6: Validate mandatory fields and classify transactions: Debit, credit, or transfer.
-          if (!validateMandatoryFields(transactionDate, transactionAmount, category, fromAccount)) return;
+          if (!validateMandatoryFields(getMandatoryFields(transactionDate, transactionAmount, category, fromAccount), email)) return;
 
           // Step 7: Handle "Transfer" transactions by creating corresponding debit and credit entries from a single email
           // if (transactionType === "Transfer") {
@@ -103,15 +107,23 @@ function processTransactionEmails(e) {
             subcategory,
             account: fromAccount
           });
+
+          // Check for duplicate
+          const isDuplicate = isDuplicateTransaction(transactionPayload, existingRows);
           var silentErrors = currentTransactionSilentErrors.join("; ");
           transactions.push({...transactionPayload});
           // Aggregating these separately since these're not contributing to transaction URL.
-          metadata.push({source : emailData.source, silentErrors});
+          var metadataEntry = {
+            source: emailData.source, 
+            silentErrors: silentErrors,
+            txnType: isDuplicate ? TransactionType.DUPLICATE : (isDebit ? TransactionType.DEBIT : TransactionType.CREDIT)
+          };
+          metadata.push(metadataEntry);
           // }
 
           // Step 8: Prepare transaction data for appending to the spreadsheet
           var rowData = [
-            CONSTANTS.SUCCESS_STATUS,
+            isDuplicate ? CONSTANTS.DUPLICATE : CONSTANTS.SUCCESS_STATUS,
             moment(transactionDate).format(DATE_FORMATS.DISPLAY.DATETIME),
             `${adjustedAmount}`,
             transactionType,
@@ -130,23 +142,12 @@ function processTransactionEmails(e) {
           ];
 
           // Step 9: Append successfully processed transactions to the Google Sheet
-          Logger.log('[SUCCESS] Appending to Google Sheet: ' + rowData);
+          Logger.log(`[${rowData[0]}] Appending to Google Sheet: ${rowData}`);
           transactionSheet.appendRow(rowData);
-          ProcessedCount.SUCCESS++;
+          isDuplicate ? ProcessedCount.SKIPPED++ : ProcessedCount.SUCCESS++;
 
           // Step 10: Label processed emails and update their status
-          if (DEV_CONFIG.MARK_AS_PROCESSED) {
-            // Approach 1 : Apply label to thread. (Doesn't use GMAIL API)
-            // Even if some emails in the thread are not processed, the tag is still applied on all emails and they're not picked on rerun of script.
-            // let nestedLabelPath = "Txs/✅";
-            // let label = GmailApp.getUserLabelByName(nestedLabelPath) //|| GmailApp.createLabel(nestedLabelPath);
-            // thread.addLabel(label);
-
-            // Approach 2 [Recommended] : Apply label to email. (Uses GMAIL API) - Advantage in Readme Appendix
-            Gmail.Users.Messages.modify(labelRequest, 'me', emailId); // Apply the label
-            Logger.log(`Label '${LABELS.PROCESSED}' applied to email with ID: ${emailId}`);    
-            email.markRead();
-          }
+          labelEmail(labelRequestSuccess, email);
         }
       });
     });
@@ -154,9 +155,14 @@ function processTransactionEmails(e) {
     // Step 11: Generate a summary URL and send an email with the transaction details.
     printProcessingSummary(); 
     if (transactions.length > 0) {
-      var finalTransactionUrl = createFinalTransactionUrl({transactions});
+      // Filter out duplicate transactions using metadata
+      const nonDuplicateTransactions = transactions.filter((txn, index) => 
+        metadata[index].txnType !== CONSTANTS.DUPLICATE
+      );
+      
+      var finalTransactionUrl = createFinalTransactionUrl({transactions: nonDuplicateTransactions});
       sendSuccessEmail(finalTransactionUrl, transactions, metadata)
-      return {transactions, ProcessedCount};  // Response for /dev & /exec
+      return {ProcessedCount, transactions, metadata};  // Response for /dev & /exec
     }
   } catch (e) {
     Logger.log("[ERROR] Unhandled error in mainFunction: " + e.message);

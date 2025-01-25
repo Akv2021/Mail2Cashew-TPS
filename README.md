@@ -36,11 +36,16 @@ This script automates the process of managing financial transactions received vi
    - Directly adding transactions to Cashew.
    - Editing transactions for both PC and mobile apps.
    - ![](./resources/20250113013606.png)
-5. **Silent Errors**: Any fallback values used due to missing data are mentioned in the success email.
+5. **Identify Duplicate Transactions**: Any transaction for which exact matching details are already present in sheet are skipped by default:
+   - Duplicate transactions are not included in any URL (Edit/Approve). 
+   - If required then enter manually OR use single Transaction URL added to sheet.
+   - Color coded by Red background.
+   - ![](./resources/20250126011056.png)
+6. **Silent Errors**: Any fallback values used due to missing data are mentioned in the success email.
    - ![](./resources/20250113013241.png)
-6. **Stopping Errors**: Failed emails trigger error notifications.
+7. **Stopping Errors**: Failed emails trigger error notifications.
    - ![](./resources/20250113013843.png)
-7. **Data Storage**: All processed information is stored in a Google Sheet for future analysis and rerunning failed queries.
+8. **Data Storage**: All processed information is stored in a Google Sheet for future analysis and rerunning failed queries.
    Sample SpeadSheet [Link](./resources/Copy%20of%20Sample%20Sheet.xlsx)
 
 ---
@@ -170,6 +175,7 @@ This script automates the process of managing financial transactions received vi
         TESTCASES: 'Txs/🧪',    // Tag emails for running in sanity tests usecase.
         IGNORED: 'Txs/❌',      // Tag emails which are not valid transaction emails. Can be used on top of above filters to skip specific emails.
         PROCESSED: 'Txs/✅',    // Tag emails which have been processed by Script successfully.
+        TO_FIX: 'Txs/🛠️',       // Tag emails that need Regex update before it's success. These will be excluded unless regex is fixed in code.
     };
 ```
 

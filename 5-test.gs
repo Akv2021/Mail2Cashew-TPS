@@ -15,6 +15,7 @@ const DEV_CONFIG = {
 
     // After email is processed if we mark it as read & apply LABELS.PROCESSED then it can't be rerun.
     MARK_AS_PROCESSED: true, // True - Mark as read and apply LABELS.PROCESSED. False - Keep it unchanged to allow rerun.
+    IDENTIFY_DUPLICATES: true, // True - check all existing entries and skip entry from final URL if same details are already present. False - Ignore existing.
 
     SANITY_TESTS_RUN: false, // During sanity testing, Only LABELS.TESTCASES are run.
     OUTPUT_SHEET_TITLE: CONFIG.MAIN_SHEET_NAME, // Which sheet shall the result be written to.
@@ -37,7 +38,8 @@ function testDoGet() {
 // Explicitly run for these
 // Ignore these values for time driven Trigger - https://developers.google.com/apps-script/guides/triggers/events#time-driven-events
 function getTestThreadsOrQuery() {
-    return ['193f3d90e07f3689'];
+    DEV_CONFIG.IDENTIFY_DUPLICATES = false;
+    // return ['193f3d90e07f3123'];
     // return null; // Default: No test data available
 
     // Uncomment as needed for testing:
@@ -254,6 +256,7 @@ const TestResultsBgColors = deepFreeze({
 });
 
 function compareRows(outputData, expectedData, outputSheet, expectedSheet) {
+    // TODO: Create array of headers and find column from there. kanpilotID(pk4rmg2qyufx8j971pjw3t5d)
     const emailIdIndex = 12;
 
     // Create a map of expected rows by emailId for quick lookup
