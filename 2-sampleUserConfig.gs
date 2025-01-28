@@ -1,4 +1,4 @@
-// Secrets to store in GScript Properties. Optionally remove from here post triggering storeSecrets
+// Secrets to store in GScript Properties. Don't keep actual values here.
 const mySecrets = {
     EMAIL: "user1@example.com",
     SPREADSHEET_ID: "1234",
@@ -67,7 +67,7 @@ const smsRuleMap = deepFreeze({
         fromAccountRegex: /A\/C\s*(XXXXXX\d{4})/, // Matches "XXXXXX1234"
         amountRegex: /Rs\s*(\d+\.?\d*)/, // Matches "10.00" from "Rs 10.00"
         notesRegex: /credited to\s*([A-Za-z0-9]+@[A-Za-z0-9]+).*?/, // Matches "1234@abc"
-        categoryRegex: USER_CONSTANTS.EXPENSE_CATEGORY, // Static category
+        categoryRegex: USER_DEFAULTS.EXPENSE_CATEGORY, // Static category
         subcategoryRegex: "SubCategory1" // Static subcategory
     }, 
     // Reversal of Rs 6.07 credited to ABC Bank Credit Card XX1234 on 14-DEC-24.
@@ -75,7 +75,7 @@ const smsRuleMap = deepFreeze({
         fromAccountRegex: /ABC Bank Credit Card\s+(XX\d+)/,
         amountRegex: /Reversal of Rs\s*(\d+(?:,\d+)*(?:\.\d{2})?)/,
         notesRegex: "Fuel Surcharge Reversal",
-        categoryRegex: USER_CONSTANTS.INCOME_CATEGORY, // Static category
+        categoryRegex: USER_DEFAULTS.INCOME_CATEGORY, // Static category
         subcategoryRegex: "SubCategory2", // Static subcategory
         isDebit: false
     }
@@ -105,7 +105,7 @@ const categorySubcategoryKeywordMap = deepFreeze({
             subcategories: null
         },
         "Uncategorized Expense": {
-            keywords: [USER_CONSTANTS.EXPENSE_CATEGORY]     // Manually set in regex
+            keywords: [USER_DEFAULTS.EXPENSE_CATEGORY]     // Manually set in regex
         }
     },
     incomes: {
@@ -161,7 +161,7 @@ const accountKeywordMap = deepFreeze(enrichMapWithSecrets(baseAccountIdsMap, acc
  * // Returns: { "account Name in Cashew": ["Bank Name", "additional", "identifiers"], "CC": ["Credit Card"] }
 */
 
-const USER_CONSTANTS = deepFreeze({
+const USER_DEFAULTS = deepFreeze({
     EXPENSE_CATEGORY: "Uncategorized Expense",
     INCOME_CATEGORY: "Uncategorized Income",
     ACCOUNT: "Cash",

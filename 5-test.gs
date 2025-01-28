@@ -38,8 +38,8 @@ function testDoGet() {
 // Explicitly run for these
 // Ignore these values for time driven Trigger - https://developers.google.com/apps-script/guides/triggers/events#time-driven-events
 function getTestThreadsOrQuery() {
+    // return ['193f3d90e07f3689'];
     DEV_CONFIG.IDENTIFY_DUPLICATES = false;
-    // return ['193f3d90e07f3123'];
     // return null; // Default: No test data available
 
     // Uncomment as needed for testing:

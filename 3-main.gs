@@ -38,7 +38,8 @@ function processTransactionEmails(e) {
       var emails = thread.getMessages();
       emails.forEach(function (email) {
         // Fetch existing rows INSIDE the loop to capture newly added rows
-        const existingRows = transactionSheet.getRange(2, 1, transactionSheet.getLastRow() - 1, 15).getValues();
+        const existingRows = transactionSheet.getLastRow() > 1 ? transactionSheet.getRange(2, 1, transactionSheet.getLastRow() - 1, 15)
+                              .getValues().filter(row => row.some(cell => cell)) : []; // Exclude empty cells
         
         // Step 2: Skip already processed emails unless overridden in config
         if (email.isUnread() || DEV_CONFIG.RERUN_READ_MAILS) {
@@ -89,7 +90,8 @@ function processTransactionEmails(e) {
           const title = generateTitle(merchant, sanitizedText);
 
           // Step 6: Validate mandatory fields and classify transactions: Debit, credit, or transfer.
-          if (!validateMandatoryFields(getMandatoryFields(transactionDate, transactionAmount, category, fromAccount), email)) return;
+          const mandatoryFields = getMandatoryFields(transactionDate, transactionAmount, category, fromAccount);
+          if (!validateMandatoryFields(mandatoryFields, email, labelRequestFailed)) return;
 
           // Step 7: Handle "Transfer" transactions by creating corresponding debit and credit entries from a single email
           // if (transactionType === "Transfer") {
@@ -109,7 +111,7 @@ function processTransactionEmails(e) {
           });
 
           // Check for duplicate
-          const isDuplicate = isDuplicateTransaction(transactionPayload, existingRows);
+          const isDuplicate = isDuplicateTransaction(transactionPayload, existingRows, ProcessedCount.TOTAL);
           var silentErrors = currentTransactionSilentErrors.join("; ");
           transactions.push({...transactionPayload});
           // Aggregating these separately since these're not contributing to transaction URL.

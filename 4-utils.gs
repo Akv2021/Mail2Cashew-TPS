@@ -28,27 +28,6 @@ function isEmailAlreadyProcessed() {
   return emailIdRange.some(row => row[0] === emailData.emailId);
 }
 
-function isDuplicateTransaction(transactionPayload, existingRows) {
-  if(!DEV_CONFIG.IDENTIFY_DUPLICATES) return false;
-  
-  return existingRows.some(row => {
-    // Ensure dates are compared in the same format
-    const rowDate = moment(row[1], DATE_FORMATS.DISPLAY.DATETIME);
-    const payloadDate = moment(transactionPayload.date, DATE_FORMATS.CASHEW_FORMAT);
-
-    return (
-      rowDate.isSame(payloadDate) &&
-      parseFloat(row[2]) === transactionPayload.amount &&
-      row[4] === transactionPayload.account &&
-      row[5] === transactionPayload.category &&
-      // Handle empty/null/undefined for subcategory/ title/ notes
-      (row[6] || '') === (transactionPayload.subcategory || '') &&
-      (row[8] || '') === (transactionPayload.title || '') &&
-      (row[9] || '') === (transactionPayload.notes || '')
-    );
-  });
-}
-
 function labelEmail(labelRequest, email) {
   if (DEV_CONFIG.MARK_AS_PROCESSED) {
     // Approach 1 : Apply label to thread. (Doesn't use GMAIL API)
@@ -77,7 +56,7 @@ function getMandatoryFields(transactionDate, transactionAmount, category, fromAc
   };
 }
 
-function validateMandatoryFields(mandatoryFields, email) {
+function validateMandatoryFields(mandatoryFields, email, labelRequestFailed) {
   const missingFields = Object.keys(mandatoryFields).filter(field => !mandatoryFields[field]);
   
   if (missingFields.length > 0) {
@@ -95,6 +74,180 @@ function cleanEmailBody(text) {
   return text.replace(/\r?\n|\r/g, " ").replace(/\*/g, "").replace(/\s+/g, " ").trim();
 }
 
+// ███████ ██ ███    ██ ██████      ██████  ██    ██ ██████  ██      ██  ██████  █████  ████████ ███████ ███████     
+// ██      ██ ████   ██ ██   ██     ██   ██ ██    ██ ██   ██ ██      ██ ██      ██   ██    ██    ██      ██          
+// █████   ██ ██ ██  ██ ██   ██     ██   ██ ██    ██ ██████  ██      ██ ██      ███████    ██    █████   ███████     
+// ██      ██ ██  ██ ██ ██   ██     ██   ██ ██    ██ ██      ██      ██ ██      ██   ██    ██    ██           ██     
+// ██      ██ ██   ████ ██████      ██████   ██████  ██      ███████ ██  ██████ ██   ██    ██    ███████ ███████    
+
+// Utility to normalize field values
+const normalizeField = value => (value ? value.toString() : '');
+
+// Utility to create a readable date format
+const formatDate = date =>
+  moment(date).isValid() ? moment(date).format('DD-MM-YY HH:mm:ss') : '';
+
+// Function to calculate the maximum width for each column (excluding headers)
+const calculateColumnWidths = (rows, headers) => {
+  const allRows = [headers, ...rows];
+  return allRows[0].map((_, colIndex) =>
+    Math.max(...allRows.map(row => (row[colIndex] || '').toString().length))
+  );
+};
+
+// Function to pad each column to ensure alignment
+const padRowColumns = (row, columnWidths) =>
+  row
+    .map((cell, index) => {
+      const cellValue = (cell || '').toString();
+      return cellValue.padEnd(columnWidths[index], ' ');
+    })
+    .join('\t');
+
+// Function to log the first 10 rows of existing data in tabular form
+const logExistingRowsTable = (normalizedRows, tableHeaders) => {
+  const formattedRows = normalizedRows.map((row, index) => [
+    (index + 1).toString(),
+    formatDate(row[0]),
+    ...row.slice(1),
+  ]);
+
+  const columnWidths = calculateColumnWidths(formattedRows, tableHeaders);
+  const headerRow = padRowColumns(tableHeaders, columnWidths);
+  const dataRows = formattedRows.map(row => padRowColumns(row, columnWidths)).join('\n');
+
+  Logger.log(`\n[DEBUG] Existing Rows (Total: ${normalizedRows.length})\n${headerRow}\n${dataRows}`);
+};
+
+// Function to compare a single row with the transaction payload
+const compareRowWithPayload = (row, transactionPayload, normalizedRows, rowIndex, comparisonResults) => {
+  const rowDate = moment(new Date(row[0])); // Spreadsheet date
+  const payloadDate = moment(transactionPayload.date, DATE_FORMATS.CASHEW_FORMAT); // Payload date
+
+  if (!rowDate.isValid() || !payloadDate.isValid()) {
+    Logger.log(`[ERROR] Invalid date comparison at Row Index: ${rowIndex + 2} | Row Date: ${row[0]}, Payload Date: ${transactionPayload.date}`);
+    comparisonResults.push({
+      rowIndex: rowIndex + 2,
+      status: '⚠️',
+      rowData: row,
+    });
+    return false;
+  }
+
+  // Convert dates to Unix timestamps for precise comparison
+  const rowTimestamp = rowDate.unix();
+  const payloadTimestamp = payloadDate.unix();
+
+  // Compare fields for duplicate detection
+  const isMatch =
+    rowTimestamp === payloadTimestamp &&
+    parseFloat(row[1]) === parseFloat(transactionPayload.amount) &&
+    row[3] === normalizeField(transactionPayload.account) &&
+    row[4] === normalizeField(transactionPayload.category) &&
+    row[5] === normalizeField(transactionPayload.subcategory) &&
+    row[7] === normalizeField(transactionPayload.title) &&
+    row[8] === normalizeField(transactionPayload.notes);
+
+  comparisonResults.push({
+    rowIndex: rowIndex + 2,
+    status: isMatch ? '✅' : '❌',
+    rowData: row,
+  });
+
+  return isMatch;
+};
+
+// Function to add the payload row as the first entry in the comparison results
+const addPayloadRowToComparisonResults = (transactionPayload, payloadIndex, comparisonResults) => {
+  const payloadRow = {
+    rowIndex: `#${payloadIndex + 1}`,
+    status: '-',
+    rowData: [
+      transactionPayload.date,
+      transactionPayload.amount,
+      transactionPayload.accountingType || '',
+      transactionPayload.account,
+      transactionPayload.category,
+      transactionPayload.subcategory,
+      transactionPayload.merchant || '',
+      transactionPayload.title,
+      transactionPayload.notes,
+    ].map(normalizeField),
+  };
+
+  comparisonResults.unshift(payloadRow);
+};
+
+// Function to build and log the comparison table
+const buildComparisonTable = (comparisonResults, tableHeaders, payloadIndex) => {
+  const formattedRows = comparisonResults.map(({ rowIndex, status, rowData }) => [
+    rowIndex,
+    status,
+    formatDate(rowData[0]), // Format the date
+    rowData[1],
+    rowData[2],
+    rowData[3],
+    rowData[4],
+    rowData[5],
+    rowData[6],
+    rowData[7],
+  ]);
+
+  const columnWidths = calculateColumnWidths(formattedRows, tableHeaders);
+
+  // Format the table headers and rows
+  const headerRow = padRowColumns(tableHeaders, columnWidths);
+  const dataRows = formattedRows.map(row => padRowColumns(row, columnWidths)).join('\n');
+
+  // Build the full comparison table string
+  const comparisonTable = `\n[DEBUG] Comparison Table for Payload #${payloadIndex + 1}\n${headerRow}\n${dataRows}`;
+
+  // Log the comparison table
+  Logger.log(comparisonTable);
+};
+
+// Main function for checking if a transaction is a duplicate
+function isDuplicateTransaction(transactionPayload, existingRows, payloadIndex) {
+  if (!DEV_CONFIG.IDENTIFY_DUPLICATES) return false;
+
+  // Define table headers
+  const tableHeaders = [
+    'Index',
+    'Date',
+    'Amount',
+    'Type',
+    'Account',
+    'Category',
+    'Subcategory',
+    'Merchant',
+    'Title',
+    'Notes',
+  ];
+
+  // Pre-normalize and slice rows for cleaner comparisons
+  const normalizedRows = existingRows.map(row => row.slice(1, 10).map(normalizeField));
+
+  // Log the existing rows table (this line was missing)
+  logExistingRowsTable(normalizedRows, tableHeaders);
+
+  const comparisonResults = [];
+
+  // Collect comparison results for the payload
+  const isDuplicate = normalizedRows.some((row, rowIndex) => {
+    return compareRowWithPayload(row, transactionPayload, normalizedRows, rowIndex, comparisonResults);
+  });
+
+  // Add the payload as the first row in the table
+  addPayloadRowToComparisonResults(transactionPayload, payloadIndex, comparisonResults);
+
+  // Add 'Status' to table headers
+  tableHeaders.splice(1, 0, 'Status');
+
+  // Build and log the comparison table
+  buildComparisonTable(comparisonResults, tableHeaders, payloadIndex);
+
+  return isDuplicate;
+}
 
 // ,------.                                    ,------.        ,--.          ,--.            ,--. 
 // |  .--. ' ,---.  ,---.  ,---. ,--.  ,--.    |  .--. ' ,---. |  | ,--,--.,-'  '-. ,---.  ,-|  | 
@@ -361,10 +514,10 @@ function getTransactionCategory(data, emailBody, isDebit) {
   }
 
   // Default if no match is found
-  logError(ErrorType.NO_CATEGORY, `No matching ${categoryType} category found for ${data}. Using default category ${isDebit ? USER_CONSTANTS.EXPENSE_CATEGORY : USER_CONSTANTS.INCOME_CATEGORY}`, false);    // silent error
+  logError(ErrorType.NO_CATEGORY, `No matching ${categoryType} category found for ${data}. Using default category ${isDebit ? USER_DEFAULTS.EXPENSE_CATEGORY : USER_DEFAULTS.INCOME_CATEGORY}`, false);    // silent error
   return {
     categoryType,
-    category: isDebit ? USER_CONSTANTS.EXPENSE_CATEGORY : USER_CONSTANTS.INCOME_CATEGORY,
+    category: isDebit ? USER_DEFAULTS.EXPENSE_CATEGORY : USER_DEFAULTS.INCOME_CATEGORY,
     subcategory: null
   };
 }
@@ -410,8 +563,8 @@ function getAccountName(data, emailBody) {
   }
 
   // Default account if no match is found
-  logError(ErrorType.NO_ACCOUNT, `No matching account found for ${data}. Defaulting to ${USER_CONSTANTS.ACCOUNT}.`, false);     // silent error
-  return USER_CONSTANTS.ACCOUNT;
+  logError(ErrorType.NO_ACCOUNT, `No matching account found for ${data}. Defaulting to ${USER_DEFAULTS.ACCOUNT}.`, false);     // silent error
+  return USER_DEFAULTS.ACCOUNT;
 }
 
 // Generate transaction title
