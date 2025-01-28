@@ -224,8 +224,10 @@ function isDuplicateTransaction(transactionPayload, existingRows, payloadIndex) 
     'Notes',
   ];
 
-  // Pre-normalize and slice rows for cleaner comparisons
-  const normalizedRows = existingRows.map(row => row.slice(1, 10).map(normalizeField));
+// Pre-normalize and filter rows to remove those where row[0] !== 'Success'
+const normalizedRows = existingRows
+  .filter(row => row[0] === CONSTANTS.SUCCESS_STATUS) // Filter out non-'Success' rows
+  .map(row => row.slice(1, 10).map(normalizeField)); // Normalize the remaining rows
 
   // Log the existing rows table (this line was missing)
   logExistingRowsTable(normalizedRows, tableHeaders);
