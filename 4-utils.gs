@@ -83,11 +83,23 @@ function cleanEmailBody(text) {
 // Utility to normalize field values
 const normalizeField = value => (value ? value.toString() : '');
 
-// Utility to create a readable date format
+// Utility to format date for logging
 const formatDate = date =>
   moment(date).isValid() ? moment(date).format('DD-MM-YY HH:mm:ss') : '';
 
-// Function to calculate the maximum width for each column (excluding headers)
+// Utility to extract the month as a short name (e.g., "Jan", "Feb")
+const extractMonth = date => moment(date).format('MMM');
+
+// Utility to chunk large log output to avoid truncation
+const logInChunks = (header, rows, chunkSize = 20) => {
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize).join('\n');
+    Logger.log(`${header}\n${chunk}`);
+    header = ''; // Ensure header is only logged once
+  }
+};
+
+// Function to calculate max column widths for alignment
 const calculateColumnWidths = (rows, headers) => {
   const allRows = [headers, ...rows];
   return allRows[0].map((_, colIndex) =>
@@ -95,52 +107,49 @@ const calculateColumnWidths = (rows, headers) => {
   );
 };
 
-// Function to pad each column to ensure alignment
+// Function to pad columns for alignment
 const padRowColumns = (row, columnWidths) =>
-  row
-    .map((cell, index) => {
-      const cellValue = (cell || '').toString();
-      return cellValue.padEnd(columnWidths[index], ' ');
-    })
-    .join('\t');
+  row.map((cell, index) => (cell || '').toString().padEnd(columnWidths[index], ' ')).join('\t');
 
-// Function to log the first 10 rows of existing data in tabular form
-const logExistingRowsTable = (normalizedRows, tableHeaders) => {
-  const formattedRows = normalizedRows.map((row, index) => [
-    (index + 1).toString(),
-    formatDate(row[0]),
-    ...row.slice(1),
+// Logs existing transactions in a tabular format (filtered by month)
+const logExistingRowsTable = (normalizedRows, tableHeaders, transactionMonth) => {
+  const monthFilteredRows = normalizedRows.filter(row => extractMonth(row[0]) === transactionMonth);
+
+  if (monthFilteredRows.length === 0) {
+    Logger.log(`[DEBUG] No transactions found for ${transactionMonth}`);
+    return;
+  }
+
+  // Format rows for logging
+  const formattedRows = monthFilteredRows.map((row, index) => [
+    (index + 1).toString(), formatDate(row[0]), ...row.slice(1),
   ]);
 
+  // Compute column widths
   const columnWidths = calculateColumnWidths(formattedRows, tableHeaders);
   const headerRow = padRowColumns(tableHeaders, columnWidths);
-  const dataRows = formattedRows.map(row => padRowColumns(row, columnWidths)).join('\n');
+  const dataRows = formattedRows.map(row => padRowColumns(row, columnWidths));
 
-  Logger.log(`\n[DEBUG] Existing Rows (Total: ${normalizedRows.length})\n${headerRow}\n${dataRows}`);
+  // Log header separately before chunking rows
+  Logger.log(`\n[DEBUG] Existing Transactions for ${transactionMonth} (Total: ${monthFilteredRows.length})\n${headerRow}`);
+  logInChunks('', dataRows);  // Header already logged, pass empty string
 };
 
-// Function to compare a single row with the transaction payload
-const compareRowWithPayload = (row, transactionPayload, normalizedRows, rowIndex, comparisonResults) => {
+// Compares a row with the transaction payload
+const compareRowWithPayload = (row, transactionPayload, rowIndex, source) => {
   const rowDate = moment(new Date(row[0])); // Spreadsheet date
   const payloadDate = moment(transactionPayload.date, DATE_FORMATS.CASHEW_FORMAT); // Payload date
 
   if (!rowDate.isValid() || !payloadDate.isValid()) {
-    Logger.log(`[ERROR] Invalid date comparison at Row Index: ${rowIndex + 2} | Row Date: ${row[0]}, Payload Date: ${transactionPayload.date}`);
-    comparisonResults.push({
-      rowIndex: rowIndex + 2,
-      status: '⚠️',
-      rowData: row,
-    });
-    return false;
+    Logger.log(`[ERROR] Invalid date comparison at Row Index: ${rowIndex + 2}`);
+    return { rowIndex: rowIndex + 2, status: '⚠️', rowData: row };
   }
 
-  // Convert dates to Unix timestamps for precise comparison
-  const rowTimestamp = rowDate.unix();
-  const payloadTimestamp = payloadDate.unix();
+  // If source is SMS, compare only date (ignore time)
+  const isDateMatch = (source === Source.SMS) ? rowDate.isSame(payloadDate, 'day') : rowDate.unix() === payloadDate.unix();
 
-  // Compare fields for duplicate detection
   const isMatch =
-    rowTimestamp === payloadTimestamp &&
+    isDateMatch &&
     parseFloat(row[1]) === parseFloat(transactionPayload.amount) &&
     row[3] === normalizeField(transactionPayload.account) &&
     row[4] === normalizeField(transactionPayload.category) &&
@@ -148,18 +157,61 @@ const compareRowWithPayload = (row, transactionPayload, normalizedRows, rowIndex
     row[7] === normalizeField(transactionPayload.title) &&
     row[8] === normalizeField(transactionPayload.notes);
 
-  comparisonResults.push({
-    rowIndex: rowIndex + 2,
-    status: isMatch ? '✅' : '❌',
-    rowData: row,
-  });
-
-  return isMatch;
+  return { rowIndex: rowIndex + 2, status: isMatch ? '✅' : '❌', rowData: row };
 };
 
-// Function to add the payload row as the first entry in the comparison results
-const addPayloadRowToComparisonResults = (transactionPayload, payloadIndex, comparisonResults) => {
-  const payloadRow = {
+// Logs the comparison table
+const buildComparisonTable = (comparisonResults, tableHeaders, payloadIndex, transactionMonth) => {
+  const monthFilteredResults = comparisonResults.filter(({ rowData }) => extractMonth(rowData[0]) === transactionMonth);
+  
+  if (monthFilteredResults.length === 0) {
+    Logger.log(`[DEBUG] No comparison data for ${transactionMonth}`);
+    return;
+  }
+
+  const formattedRows = monthFilteredResults.map(({ rowIndex, status, rowData }) => [
+    rowIndex, status, formatDate(rowData[0]), rowData[1], rowData[2], rowData[3],
+    rowData[4], rowData[5], rowData[6], rowData[7], rowData[8]
+  ]);
+
+  // Compute column widths
+  const columnWidths = calculateColumnWidths(formattedRows, tableHeaders);
+  const headerRow = padRowColumns(tableHeaders, columnWidths);
+  const dataRows = formattedRows.map(row => padRowColumns(row, columnWidths));
+
+  // Log header separately before chunking rows
+  Logger.log(`\n[DEBUG] Comparison Table for Payload #${payloadIndex + 1} (${transactionMonth})\n${headerRow}`);
+  logInChunks('', dataRows);
+};
+
+// Checks if a transaction is a duplicate
+function isDuplicateTransaction(transactionPayload, existingRows, payloadIndex, source) {
+  if (!DEV_CONFIG.IDENTIFY_DUPLICATES) return false;
+
+  // Define headers for the tables
+  const tableHeaders = ['Index', 'Date', 'Amount', 'Type', 'Account', 'Category', 'Subcategory', 'Merchant', 'Title', 'Notes'];
+
+  // Filter and normalize existing rows
+  const normalizedRows = existingRows
+    .filter(row => row[0] === CONSTANTS.SUCCESS_STATUS) // Keep only "Success" rows
+    .map(row => row.slice(1, 10).map(normalizeField));
+
+  // Extract the month from transactionPayload
+  const transactionMonth = extractMonth(transactionPayload.date);
+
+  // Log existing transactions table
+  logExistingRowsTable(normalizedRows, tableHeaders, transactionMonth);
+
+  const comparisonResults = [];
+
+  // Compare each row with the transaction payload
+  normalizedRows.forEach((row, rowIndex) => {
+    const result = compareRowWithPayload(row, transactionPayload, rowIndex, source);
+    comparisonResults.push(result);
+  });
+
+  // Add the payload row to the comparison results
+  comparisonResults.unshift({
     rowIndex: `#${payloadIndex + 1}`,
     status: '-',
     rowData: [
@@ -173,82 +225,17 @@ const addPayloadRowToComparisonResults = (transactionPayload, payloadIndex, comp
       transactionPayload.title,
       transactionPayload.notes,
     ].map(normalizeField),
-  };
-
-  comparisonResults.unshift(payloadRow);
-};
-
-// Function to build and log the comparison table
-const buildComparisonTable = (comparisonResults, tableHeaders, payloadIndex) => {
-  const formattedRows = comparisonResults.map(({ rowIndex, status, rowData }) => [
-    rowIndex,
-    status,
-    formatDate(rowData[0]), // Format the date
-    rowData[1],
-    rowData[2],
-    rowData[3],
-    rowData[4],
-    rowData[5],
-    rowData[6],
-    rowData[7],
-  ]);
-
-  const columnWidths = calculateColumnWidths(formattedRows, tableHeaders);
-
-  // Format the table headers and rows
-  const headerRow = padRowColumns(tableHeaders, columnWidths);
-  const dataRows = formattedRows.map(row => padRowColumns(row, columnWidths)).join('\n');
-
-  // Build the full comparison table string
-  const comparisonTable = `\n[DEBUG] Comparison Table for Payload #${payloadIndex + 1}\n${headerRow}\n${dataRows}`;
-
-  // Log the comparison table
-  Logger.log(comparisonTable);
-};
-
-// Main function for checking if a transaction is a duplicate
-function isDuplicateTransaction(transactionPayload, existingRows, payloadIndex) {
-  if (!DEV_CONFIG.IDENTIFY_DUPLICATES) return false;
-
-  // Define table headers
-  const tableHeaders = [
-    'Index',
-    'Date',
-    'Amount',
-    'Type',
-    'Account',
-    'Category',
-    'Subcategory',
-    'Merchant',
-    'Title',
-    'Notes',
-  ];
-
-// Pre-normalize and filter rows to remove those where row[0] !== 'Success'
-const normalizedRows = existingRows
-  .filter(row => row[0] === CONSTANTS.SUCCESS_STATUS) // Filter out non-'Success' rows
-  .map(row => row.slice(1, 10).map(normalizeField)); // Normalize the remaining rows
-
-  // Log the existing rows table (this line was missing)
-  logExistingRowsTable(normalizedRows, tableHeaders);
-
-  const comparisonResults = [];
-
-  // Collect comparison results for the payload
-  const isDuplicate = normalizedRows.some((row, rowIndex) => {
-    return compareRowWithPayload(row, transactionPayload, normalizedRows, rowIndex, comparisonResults);
   });
 
-  // Add the payload as the first row in the table
-  addPayloadRowToComparisonResults(transactionPayload, payloadIndex, comparisonResults);
+  // Add 'Status' column only in the comparison table
+  const comparisonHeaders = [...tableHeaders];
+  comparisonHeaders.splice(1, 0, 'Status');
 
-  // Add 'Status' to table headers
-  tableHeaders.splice(1, 0, 'Status');
+  // Log the comparison table
+  buildComparisonTable(comparisonResults, comparisonHeaders, payloadIndex, transactionMonth);
 
-  // Build and log the comparison table
-  buildComparisonTable(comparisonResults, tableHeaders, payloadIndex);
-
-  return isDuplicate;
+  // Return whether a duplicate was found
+  return comparisonResults.some(row => row.status === '✅');
 }
 
 // ,------.                                    ,------.        ,--.          ,--.            ,--. 
@@ -286,6 +273,7 @@ function getApplicableRegexMap(isSMS){
   var ruleId = isSMS ? identifyMessageRule(messageContent) : emailSubjectToRuleIdMap[messageContent];
 
   if(!ruleId || ruleId == CONSTANTS.DUPLICATE) return ruleId; // Don't process SMS for which email is already received.
+  Logger.log(`[RULE] ${ruleId} matched`);
   return isSMS ? smsRuleMap[ruleId] : emailRuleMap[ruleId];
 }
 

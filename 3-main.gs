@@ -111,7 +111,7 @@ function processTransactionEmails(e) {
           });
 
           // Check for duplicate
-          const isDuplicate = isDuplicateTransaction(transactionPayload, existingRows, ProcessedCount.TOTAL);
+          const isDuplicate = isDuplicateTransaction(transactionPayload, existingRows, ProcessedCount.TOTAL, emailData.source);
           var silentErrors = currentTransactionSilentErrors.join("; ");
           transactions.push({...transactionPayload});
           // Aggregating these separately since these're not contributing to transaction URL.
