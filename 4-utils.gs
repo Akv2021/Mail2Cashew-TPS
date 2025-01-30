@@ -539,21 +539,41 @@ function isDebitTransaction(emailBody, debitRegex, toAccount, transactionAmount)
  */
 function getAccountName(data, emailBody) {
   if (!data) return data; // Fail fast for empty "toAccount";
-
-  // Combine and clean the text for keyword matching
+  
   var combinedText = (data + " " + emailBody).toLowerCase();
 
-  // Iterate through the accountKeywordMap to find a match
+  if (!accountKeywordMap || Object.keys(accountKeywordMap).length === 0) {
+    Logger.log(`[ERROR] accountKeywordMap is empty or undefined!`);
+    return USER_DEFAULTS.ACCOUNT;
+  }
+
+  let bestMatch = null; 
+
+  // First pass: Look for exact matches first
   for (var accountName in accountKeywordMap) {
     var keywords = accountKeywordMap[accountName];
-    if (keywords.some(keyword => combinedText.includes(keyword.toLowerCase()))) {
-      Logger.log(`[ACCOUNT] Matched Account: ${accountName}`);
-      return accountName;
+
+    if (keywords.includes(data)) {  // Exact match with `data`
+      Logger.log(`[ACCOUNT] Exact match found for: ${data} -> ${accountName}`);
+      return accountName;  // Prioritize exact matches
     }
   }
 
-  // Default account if no match is found
-  logError(ErrorType.NO_ACCOUNT, `No matching account found for ${data}. Defaulting to ${USER_DEFAULTS.ACCOUNT}.`, false);     // silent error
+  // Second pass: Look for keyword matches in combined text
+  for (var accountName in accountKeywordMap) {
+    var keywords = accountKeywordMap[accountName];
+
+    if (keywords.some(keyword => combinedText.includes(keyword.toLowerCase()))) {
+      Logger.log(`[ACCOUNT] Matched Account: ${accountName}`);
+      bestMatch = accountName;
+    }
+  }
+
+  if (bestMatch) {
+    return bestMatch;  // Use first keyword match found
+  }
+
+  logError(ErrorType.NO_ACCOUNT, `No matching account found for ${data}. Defaulting to ${USER_DEFAULTS.ACCOUNT}.`, false);
   return USER_DEFAULTS.ACCOUNT;
 }
 
